@@ -1,0 +1,3 @@
+# py-spinnaker2 is installed from source by scripts/install.sh. It depends on
+# Brian2, NumPy, and SciPy and is not published on PyPI.
+pytest>=8
