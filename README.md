@@ -111,3 +111,16 @@ Hidden-layer weight updates use `c = λ + ρ r`. The readout is linear and is
 not a constraint. For the identity demo, `σ` is the identity, so every state
 update is a Brian2 LIF step. `tanh` and `relu` apply `σ` and `σ′` to the
 Brian2 pre-activations before the next accumulate.
+
+## Processing-element sketch
+
+`firmware/pcalm_core.c` is a thought experiment, not a binary loaded onto a
+chip. It follows the stock `lif_neuron` split. `packet_received_callback`
+adds one term of `W h_prev`. `timer_callback` drains those packets and only
+then writes `h` and applies `λ ← λ + α r`. A partial dot product does not
+update `λ`.
+
+```bash
+cc -DPCALM_HOST_CHECK -O2 -o /tmp/pcalm_core firmware/pcalm_core.c -lm
+/tmp/pcalm_core
+```
