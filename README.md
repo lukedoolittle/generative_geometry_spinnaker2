@@ -54,17 +54,38 @@ held-out samples. It prints forward MSE before and after training, held-out
 forward MSE, the augmented Lagrangian, the mean absolute constraint residual,
 and the first inferred prediction against its target.
 
-Inference does not change weights. It resets multipliers to zero, initializes
-activities on the forward pass, runs `T - 1` primal-dual cycles
-(`h ← h − η_h ∇_h L_ρ`, then `λ ← λ + α r`), and finishes with one more
-primal step. Each training step does that inference and then the weight step
-`W ← W − η_θ ∇_W L_ρ`.
+Inference does not change weights. Each iteration is a forward sweep from the
+input toward the readout. In that sweep, layer i writes its activity on the
+LIF accumulator and then updates its multiplier, `λ ← λ + α r`, before the
+sweep moves on. The first sweep is the feasible initialization (the residual
+is zero, so λ stays zero). The next `T - 1` sweeps are primal-dual. The last
+sweep is a primal step only. Each training step does that inference and then
+the weight step `W ← W − η_θ ∇_W L_ρ`.
 
 ## Tests
 
 ```bash
 pytest
 ```
+
+## Equation map
+
+Logged training loss is the feasible readout. It does not carry multipliers.
+During inference the quantities below are Brian2 affine steps inside the
+forward sweep, except the weight step, which runs once the sweeps return.
+
+| Quantity | Equation | Where it runs |
+| --- | --- | --- |
+| forward activity | h_i = σ(W_i h_{i-1}), then ŷ = W_L h_{L-1} | forward sweep, input toward the readout |
+| residual | r_i = h_i − σ(W_i h_{i-1}) | that same layer, after h_i is written |
+| combined signal | c_i = λ_i + ρ r_i | activity gradient for the sweep |
+| dual step | λ_i ← λ_i + α r_i | that same layer, before the next layer |
+| primal step | h_i ← h_i − η_h ∇_{h_i} L_ρ | primal sweeps; gradients from the state at the start of the sweep |
+| weight step | W ← W − η_θ ∇_W L_ρ | after inference, using the λ the sweeps wrote |
+
+`alpha = 0` freezes every multiplier at zero. The initialization sweep
+applies the dual step to a zero residual, and a primal-dual sweep then adds
+α r = 0. The demo uses `alpha = 1`.
 
 ## SpiNNaker2 / Brian2 pieces and the Python LPC ops
 
@@ -81,13 +102,12 @@ population whose voltage is the product. A dense signed synapse from factor
 | `i_offset` | bias term loaded for that step (activity, multiplier, or zero) |
 | `spike_list` factors, one spike per step | columns of `left @ right` |
 | signed float synapse `v += w` | one summand of a matmul or an axpy |
-| primal step | `h ← h − η_h ∇_h L_ρ` |
-| dual step | `λ ← λ + α r`, with `r = h − σ(W h_prev)` |
+| primal step | `h ← h − η_h ∇_h L_ρ` inside the forward sweep, using `c = λ + ρ r` |
+| dual step | `λ ← λ + α r` in that same layer, with `r = h − σ(W h_prev)` |
 | weight step | `∇_W L_ρ` from `c = λ + ρ r`, then `W ← W − η_θ ∇_W L_ρ` |
-| `PcalmBrian2Backend.run` | Algorithm 1: infer, then learn; Brian2 `Network.run` is the clock |
+| `PcalmBrian2Backend.run` | Algorithm 1: forward sweeps, then learn; Brian2 `Network.run` is the clock |
 
 Hidden-layer weight updates use `c = λ + ρ r`. The readout is linear and is
-not a constraint. `alpha = 0` would freeze the multipliers at zero; the demo
-uses `alpha = 1`. For the identity demo, `σ` is the identity, so every state
+not a constraint. For the identity demo, `σ` is the identity, so every state
 update is a Brian2 LIF step. `tanh` and `relu` apply `σ` and `σ′` to the
 Brian2 pre-activations before the next accumulate.
