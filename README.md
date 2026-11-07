@@ -59,7 +59,26 @@ steps as PC-ALM. It prints both training and held-out forward MSEs, the
 augmented Lagrangian, the mean absolute constraint residual, and the first
 inferred prediction against its target.
 
-Inference does not change weights. Each iteration is a forward sweep from the
+## Fashion-MNIST
+
+A second command trains on Fashion-MNIST. Targets are one-hot class vectors,
+so the supervised term stays mean squared error. Accuracy is the argmax of
+the linear readout. Backprop uses the same initialization, epochs, minibatch
+order, and step size, and its matmuls go through the same LIF accumulator.
+
+```bash
+python -m lpc_s2.fashion
+```
+
+Images are scaled to `[0, 1]`, then average-pooled from 28×28 to 7×7. The
+Brian2 synapse grid has one factor for every column of a product, so a
+flattened 784-pixel row would make that grid cubic in 784. The pool keeps
+the grid at the minibatch. The split is 32 training images and 8 test images
+from each class (320 and 80), in minibatches of 32. The network is
+`(49, 24, 10)` with `tanh`. The gzip files are downloaded into
+`data/fashion-mnist` on the first run. `python -m lpc_s2` does not use them.
+
+In both runs, inference does not change weights. Each iteration is a forward sweep from the
 input toward the readout. In that sweep, layer i writes its activity on the
 LIF accumulator and then updates its multiplier, `λ ← λ + α r`, before the
 sweep moves on. The first sweep is the feasible initialization (the residual

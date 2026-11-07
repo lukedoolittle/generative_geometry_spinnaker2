@@ -24,7 +24,12 @@ LIF_PARAMS = {
 
 @dataclass
 class Problem:
-    """Identity-chain regression and the Algorithm 1 hyperparameters."""
+    """A chain, its batch, and the Algorithm 1 hyperparameters.
+
+    ``accumulator_batch`` sizes the Brian2 synapse grid. Zero uses the longer
+    of the two stored batches. A minibatch run sets this to the minibatch
+    length and keeps the full split in ``x_train`` and ``x_held``.
+    """
 
     sizes: tuple
     weights: list
@@ -39,6 +44,7 @@ class Problem:
     rho: float
     eta_theta: float
     activation: str = "identity"
+    accumulator_batch: int = 0
 
 
 def accumulator_limits(sizes, batch):
@@ -73,7 +79,10 @@ def build_network(problem):
     sizes = tuple(int(size) for size in problem.sizes)
     if len(sizes) < 3:
         raise ValueError("sizes must include input, one hidden layer, and output")
-    batch = max(problem.x_train.shape[0], problem.x_held.shape[0])
+    if problem.accumulator_batch:
+        batch = int(problem.accumulator_batch)
+    else:
+        batch = max(problem.x_train.shape[0], problem.x_held.shape[0])
     max_m, max_n, max_p = accumulator_limits(sizes, batch)
     network = snn.Network("pcalm")
     layers = [_lif(sizes[0], "input")]

@@ -126,3 +126,67 @@ def affine_train(weights, x, y, x_held, y_held, steps, eta, activation):
         "heldout_mse": heldout_mse,
         "weights": trained,
     }
+
+
+def train_backprop_minibatches(weights, x, y, order, epochs, eta, activation, batch_size):
+    """The same gradient step as ``train_backprop``, once per minibatch.
+
+    ``order`` selects rows of ``x`` and ``y``. Copies ``weights``. Returns
+    the trained weights.
+    """
+    if epochs < 1:
+        raise ValueError("epochs must be at least 1")
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    order = np.asarray(order, dtype=np.int64)
+    trained = [np.array(weight, dtype=np.float64, copy=True) for weight in weights]
+    for _ in range(epochs):
+        for start in range(0, order.shape[0], int(batch_size)):
+            index = order[start:start + int(batch_size)]
+            gradients = backprop_gradients(trained, x[index], y[index], activation)
+            for weight, gradient in zip(trained, gradients):
+                weight -= eta * gradient
+    return trained
+
+
+def _predict_chunks(ops, weights, x, activation, batch_size):
+    """Feasible readout in row chunks, each matmul a Brian2 step."""
+    pieces = []
+    step = int(batch_size)
+    for start in range(0, x.shape[0], step):
+        state = x[start:start + step]
+        for weight in weights[:-1]:
+            pre = yield from ops.matmul(state, weight.T)
+            state = sigma(activation, pre)
+        pieces.append((yield from ops.matmul(state, weights[-1].T)))
+    return np.concatenate(pieces, axis=0)
+
+
+def affine_minibatch_train(
+    weights, x, y, x_test, order, epochs, eta, activation, batch_size
+):
+    """``train_backprop_minibatches`` as Brian2 affine steps, then both readouts.
+
+    Copies ``weights``. Returns the trained weights and the train and test
+    predictions. Every matmul and weight update is yielded. Chunk width is
+    ``batch_size``, so the accumulator only has to hold one minibatch.
+    """
+    if epochs < 1:
+        raise ValueError("epochs must be at least 1")
+    ops = Ops()
+    trained = [np.array(weight, dtype=np.float64, copy=True) for weight in weights]
+    order = np.asarray(order, dtype=np.int64)
+    for _ in range(epochs):
+        for start in range(0, order.shape[0], int(batch_size)):
+            index = order[start:start + int(batch_size)]
+            gradients = yield from _affine_gradients(ops, trained, x[index], y[index], activation)
+            for weight, gradient in zip(trained, gradients):
+                updated = yield from ops.axpy(weight, -eta, gradient)
+                weight[...] = updated
+    train_prediction = yield from _predict_chunks(ops, trained, x, activation, batch_size)
+    test_prediction = yield from _predict_chunks(ops, trained, x_test, activation, batch_size)
+    return {
+        "weights": trained,
+        "train_prediction": train_prediction,
+        "test_prediction": test_prediction,
+    }
