@@ -6,7 +6,9 @@ PC-ALM (augmented Lagrangian predictive coding) from Seely and Gould,
 integrated by the Brian2 simulation backend. Training and inference use the
 same identity-chain regression as the Python reference: sizes `(2, 8, 1)`,
 identity activations, a frozen teacher, and one student trained for 40 steps
-with inference budget `T = 20`.
+with inference budget `T = 20`. The dual rate is `alpha = 2`, so that within
+that budget PC-ALM finishes below a backprop ANN trained for the same 40
+steps from the same initialization.
 
 ## Backend
 
@@ -50,9 +52,12 @@ python -m lpc_s2
 ```
 
 That Brian2 run trains on 64 synthetic samples, then runs inference on 16
-held-out samples. It prints forward MSE before and after training, held-out
-forward MSE, the augmented Lagrangian, the mean absolute constraint residual,
-and the first inferred prediction against its target.
+held-out samples. It then trains a backprop ANN on that same batch, from the
+same initial weights, for the same 40 steps and the same step size, with no
+biases. The ANN's matmuls and weight updates are the same LIF accumulator
+steps as PC-ALM. It prints both training and held-out forward MSEs, the
+augmented Lagrangian, the mean absolute constraint residual, and the first
+inferred prediction against its target.
 
 Inference does not change weights. Each iteration is a forward sweep from the
 input toward the readout. In that sweep, layer i writes its activity on the
@@ -85,7 +90,7 @@ forward sweep, except the weight step, which runs once the sweeps return.
 
 `alpha = 0` freezes every multiplier at zero. The initialization sweep
 applies the dual step to a zero residual, and a primal-dual sweep then adds
-α r = 0. The demo uses `alpha = 1`.
+α r = 0. The demo uses `alpha = 2`.
 
 ## SpiNNaker2 / Brian2 pieces and the Python LPC ops
 

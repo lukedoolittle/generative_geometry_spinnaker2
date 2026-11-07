@@ -64,20 +64,7 @@ class PcalmBrian2Backend(brian2_sim.Brian2Backend):
         problem = getattr(network, "problem", None)
         if problem is None:
             raise ValueError("network.problem is required")
-        max_m, max_n, max_p = network.accumulator_shape
-        factors = network.get("factors")
-        accumulator = network.get("accumulator")
-        if factors is None or accumulator is None:
-            raise ValueError("network is missing the factor or accumulator population")
-        metrics = self._integrate(
-            factors,
-            accumulator,
-            max_m,
-            max_n,
-            max_p,
-            schedule(problem),
-            int(time_steps),
-        )
+        metrics = self.integrate(network, schedule(problem), time_steps)
         return RunResult(
             losses=metrics["losses"],
             heldout_mse=metrics["heldout_mse"],
@@ -89,6 +76,30 @@ class PcalmBrian2Backend(brian2_sim.Brian2Backend):
             backend_name=self.backend_name,
             brian2_version=brian2.__version__,
             integrated_on_brian2=self.integrated_on_brian2,
+        )
+
+    def integrate(self, network, gen, time_steps):
+        """Run one affine-step generator on this network's LIF accumulator.
+
+        The clock counters are reset. ``gen`` is the same kind of generator
+        ``schedule`` is: each yield is ``(offset, left, right)``.
+        """
+        self.integrated_on_brian2 = False
+        self.timesteps = 0
+        self.affine_steps = 0
+        max_m, max_n, max_p = network.accumulator_shape
+        factors = network.get("factors")
+        accumulator = network.get("accumulator")
+        if factors is None or accumulator is None:
+            raise ValueError("network is missing the factor or accumulator population")
+        return self._integrate(
+            factors,
+            accumulator,
+            max_m,
+            max_n,
+            max_p,
+            gen,
+            int(time_steps),
         )
 
     def _integrate(self, factors, accumulator, max_m, max_n, max_p, gen, time_steps):

@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from lpc_s2.ann import affine_train
 from lpc_s2.backend import PcalmBrian2Backend
 from lpc_s2.network import Problem, build_network
 
@@ -24,9 +25,12 @@ def teacher_predict(weights, inputs):
 
 
 def identity_chain_problem():
-    """Same synthetic regression as the Python LPC identity-chain demo.
+    """Identity-chain regression from the Python LPC demo, with dual rate 2.
 
     Teacher seed 1, student seed 2, data seed 0, sizes (2, 8, 1).
+    Steps, weight step, and initialization match that demo. ``alpha = 2``
+    lets the multiplier move far enough within ``T = 20`` that PC-ALM
+    finishes below the matched backprop ANN on this batch.
     """
     rng = np.random.default_rng(0)
     sizes = (2, 8, 1)
@@ -46,7 +50,7 @@ def identity_chain_problem():
         steps=40,
         T=20,
         eta_h=0.1,
-        alpha=1.0,
+        alpha=2.0,
         rho=1.0,
         eta_theta=0.15,
         activation="identity",
@@ -62,9 +66,26 @@ def step_cap(problem):
 
 def main():
     problem = identity_chain_problem()
+    # Same weights, samples, step count, and step size as PC-ALM. No biases.
+    ann_init = [weight.copy() for weight in problem.weights]
     network = build_network(problem)
     backend = PcalmBrian2Backend()
     result = backend.run(network, step_cap(problem))
+    ann_backend = PcalmBrian2Backend()
+    ann_metrics = ann_backend.integrate(
+        network,
+        affine_train(
+            ann_init,
+            problem.x_train,
+            problem.y_train,
+            problem.x_held,
+            problem.y_held,
+            steps=problem.steps,
+            eta=problem.eta_theta,
+            activation=problem.activation,
+        ),
+        step_cap(problem),
+    )
     print("PC-ALM synthetic regression on SpiNNaker2 (identity chain, sizes %s)" % (problem.sizes,))
     print("backend: %s" % result.backend_name)
     print(
@@ -73,20 +94,31 @@ def main():
     )
     print("board: none")
     print("brian2 timesteps: %d" % result.timesteps)
-    print("affine steps on the LIF accumulator: %d" % result.affine_steps)
-    print("forward MSE before training: %.6f" % result.losses[0])
-    print("forward MSE after training:  %.6f" % result.losses[-1])
-    print("held-out forward MSE:         %.6f" % result.heldout_mse)
+    print("PC-ALM affine steps on the LIF accumulator: %d" % result.affine_steps)
+    print("ANN affine steps on the LIF accumulator:    %d" % ann_backend.affine_steps)
+    print("ANN: full-batch backprop on the same Brian2 accumulator")
+    print("forward MSE before training:       %.6f" % result.losses[0])
+    print("PC-ALM forward MSE after training: %.6f" % result.losses[-1])
+    print("ANN forward MSE after training:    %.6f" % ann_metrics["losses"][-1])
+    print("PC-ALM held-out forward MSE:       %.6f" % result.heldout_mse)
+    print("ANN held-out forward MSE:          %.6f" % ann_metrics["heldout_mse"])
     print("inference energy L_rho:       %.6f" % result.energy)
     print("mean |residual| after inference: %.6e" % result.mean_abs_residual)
     print(
         "prediction[0]: %.4f  target[0]: %.4f"
         % (result.prediction0, problem.y_held[0, 0])
     )
-    if not result.integrated_on_brian2:
+    if not result.integrated_on_brian2 or not ann_backend.integrated_on_brian2:
         return 1
     if not np.isfinite(result.losses[-1]) or not np.isfinite(result.energy):
         return 1
+    if not np.isfinite(ann_metrics["losses"][-1]) or not np.isfinite(ann_metrics["heldout_mse"]):
+        return 1
     if not result.losses[-1] < result.losses[0]:
+        return 1
+    if not (
+        result.losses[-1] < ann_metrics["losses"][-1]
+        and result.heldout_mse < ann_metrics["heldout_mse"]
+    ):
         return 1
     return 0

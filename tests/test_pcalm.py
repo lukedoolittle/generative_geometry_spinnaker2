@@ -3,6 +3,7 @@
 import numpy as np
 
 from lpc_s2.algorithm import forward_sweep, infer, layer_residuals
+from lpc_s2.ann import affine_train, backprop_gradients, forward_mse, predict, train_backprop
 from lpc_s2.backend import PcalmBrian2Backend
 from lpc_s2.demo import init_weights, teacher_predict
 from lpc_s2.network import Problem, build_network
@@ -174,3 +175,96 @@ def test_short_run_matches_numpy_and_uses_brian2():
     assert result.timesteps >= result.affine_steps
     np.testing.assert_allclose(result.losses, expected, rtol=1e-8, atol=1e-8)
     assert result.losses[-1] < result.losses[0]
+
+
+def test_backprop_ann_descends_the_supervised_loss_on_the_same_batch():
+    """The demo's ANN is full-batch backprop from a copy of the chain weights."""
+    rng = np.random.default_rng(0)
+    sizes = (2, 3, 1)
+    weights = init_weights(sizes, seed=2, scale=0.15)
+    inputs = rng.normal(size=(4, 2))
+    teacher = init_weights(sizes, seed=1, scale=0.6)
+    targets = teacher_predict(teacher, inputs)
+    held_x = rng.normal(size=(2, 2))
+    held_y = teacher_predict(teacher, held_x)
+    original = [weight.copy() for weight in weights]
+
+    analytic = backprop_gradients(weights, inputs, targets, "identity")
+    epsilon = 1e-6
+    for index, gradient in enumerate(analytic):
+        numerical = np.zeros_like(gradient)
+        for row in range(gradient.shape[0]):
+            for col in range(gradient.shape[1]):
+                stepped = [weight.copy() for weight in weights]
+                stepped[index][row, col] += epsilon
+                high = 0.5 * np.mean(np.sum((predict(stepped, inputs, "identity") - targets) ** 2, axis=1))
+                stepped[index][row, col] -= 2.0 * epsilon
+                low = 0.5 * np.mean(np.sum((predict(stepped, inputs, "identity") - targets) ** 2, axis=1))
+                numerical[row, col] = (high - low) / (2.0 * epsilon)
+        np.testing.assert_allclose(gradient, numerical, rtol=1e-5, atol=1e-6)
+
+    losses, trained = train_backprop(
+        weights, inputs, targets, steps=20, eta=0.15, activation="identity"
+    )
+    assert len(losses) == 21
+    assert losses[0] == forward_mse(original, inputs, targets, "identity")
+    assert losses[-1] < losses[0]
+    assert np.isfinite(forward_mse(trained, held_x, held_y, "identity"))
+    for before, after in zip(original, weights):
+        np.testing.assert_array_equal(before, after)
+
+
+def test_brian2_backprop_matches_the_numpy_ann():
+    """The demo's ANN uses the LIF accumulator and agrees with NumPy backprop."""
+    rng = np.random.default_rng(0)
+    sizes = (2, 3, 1)
+    weights = init_weights(sizes, seed=2, scale=0.15)
+    inputs = rng.normal(size=(4, 2))
+    teacher = init_weights(sizes, seed=1, scale=0.6)
+    targets = teacher_predict(teacher, inputs)
+    held_x = rng.normal(size=(2, 2))
+    held_y = teacher_predict(teacher, held_x)
+    steps = 2
+    eta = 0.15
+    expected, trained = train_backprop(
+        weights, inputs, targets, steps=steps, eta=eta, activation="identity"
+    )
+    problem = Problem(
+        sizes=sizes,
+        weights=[weight.copy() for weight in weights],
+        x_train=inputs,
+        y_train=targets,
+        x_held=held_x,
+        y_held=held_y,
+        activation="identity",
+        steps=steps,
+        T=1,
+        eta_h=0.1,
+        alpha=1.0,
+        rho=1.0,
+        eta_theta=eta,
+    )
+    backend = PcalmBrian2Backend()
+    metrics = backend.integrate(
+        build_network(problem),
+        affine_train(
+            weights,
+            inputs,
+            targets,
+            held_x,
+            held_y,
+            steps=steps,
+            eta=eta,
+            activation="identity",
+        ),
+        5000,
+    )
+    assert backend.integrated_on_brian2
+    assert backend.affine_steps > 0
+    np.testing.assert_allclose(metrics["losses"], expected, rtol=1e-8, atol=1e-8)
+    np.testing.assert_allclose(
+        metrics["heldout_mse"],
+        forward_mse(trained, held_x, held_y, "identity"),
+        rtol=1e-8,
+        atol=1e-8,
+    )
